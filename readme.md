@@ -35,6 +35,10 @@
 
 
 
+<video src="https://github.com/ggrgrtr/people/blob/main/people_tracking_project.mp4" controls="controls" width="100%"></video>
+
+
+
 Запуск `app.py`
 Создание:
 объекта фонового потока `ThreatedCameraCapture()` для захвата камеры через `cv2`
