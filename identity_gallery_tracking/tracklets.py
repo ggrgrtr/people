@@ -186,6 +186,7 @@ class Tracklet:
     def predict_kalman(self, frame_shape):
         prediction = self.kalman.predict().reshape(-1)
         self.age += 1
+        self.observed_in_current_frame = False
         # Prediction продолжает жизнь tracklet между detect-pass, но не считается новым наблюдением
         self.predicted_bbox = self._state_to_bbox(prediction, frame_shape)
         # сглаживаем изменение рамки
@@ -386,10 +387,18 @@ class Tracklet:
         return score_sum / max(weight_sum, 1e-8)
 
     def identity_ready(self):
+        has_required_hits = self.is_confirmed(self.config.identity_min_hits)
+        has_required_features = self.feature_updates >= self.config.identity_min_feature_updates
+        has_reliable_area = bbox_area(self.smooth_bbox) >= self.config.min_identity_box_area
+        # Large boxes are trusted earlier; small boxes need extra stable ReID updates.
+        has_stable_small_box = (
+            self.is_confirmed(self.config.identity_min_hits + 2)
+            and self.feature_updates >= self.config.identity_min_feature_updates + 2
+        )
         return (
-            self.is_confirmed(self.config.identity_min_hits)
-            and self.feature_updates >= self.config.identity_min_feature_updates
-            and bbox_area(self.smooth_bbox) >= self.config.min_identity_box_area
+            has_required_hits
+            and has_required_features
+            and (has_reliable_area or has_stable_small_box)
         )
 
 
