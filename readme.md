@@ -27,7 +27,8 @@
 #base
 Слежение и вычесление маршрутов людей. попавших в кадр записи или прямой трансляции
 
-![[Pasted image 20260421111045.png]]
+
+<img width="475" height="329" alt="image" src="https://github.com/user-attachments/assets/fd13e2da-08d0-4198-bb8d-53e1d476e839" />
 
 
 
