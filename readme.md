@@ -22,34 +22,21 @@
 - `reid_resnet50_msmt17.pth` - ReID-веса для считывания признаков
 - `requirements.txt` - `python -m pip install -r`
 - `start.py`
-
-
-
-https://github.com/user-attachments/assets/6423b41c-efbe-4dab-9d38-b15692880786
-
-
-
-https://github.com/user-attachments/assets/cbd7e8d8-3bdf-44b1-ab8d-39a0d0303a65
-
-
-
-https://github.com/user-attachments/assets/2c882667-7f8b-451d-8d4c-3adec2f6da4a
-
-
 - `yolov8n.pt` - веса `YOLO`
 
 #base
 Слежение и вычесление маршрутов людей. попавших в кадр записи или прямой трансляции
 
 
+
+
+https://github.com/user-attachments/assets/6423b41c-efbe-4dab-9d38-b15692880786
+
+
 <img width="475" height="329" alt="image" src="https://github.com/user-attachments/assets/fd13e2da-08d0-4198-bb8d-53e1d476e839" />
 
 
 <img width="448" height="407" alt="image" src="https://github.com/user-attachments/assets/15334934-8120-4579-8c44-ffa1120849b1" />
-
-
-
-<video src="https://github.com/ggrgrtr/people/blob/main/people_tracking_project.mp4" controls="controls" width="100%"></video>
 
 
 
