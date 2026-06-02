@@ -445,8 +445,7 @@ class AppearanceEncoder:
                     for index in feature_indices
                     if 0 <= int(index) < len(boxes)
                 }
-        else:
-            if max_feature_boxes is None or max_feature_boxes <= 0:
+            elif max_feature_boxes is None or max_feature_boxes <= 0:
                 selected_feature_indices = set(range(len(boxes)))
             else:
                 ordered_indices = sorted(
@@ -489,4 +488,3 @@ class AppearanceEncoder:
             features[index] = normalize_feature(embedding)
 
         return features, color_histograms
-
