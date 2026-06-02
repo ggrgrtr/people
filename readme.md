@@ -22,6 +22,20 @@
 - `reid_resnet50_msmt17.pth` - ReID-веса для считывания признаков
 - `requirements.txt` - `python -m pip install -r`
 - `start.py`
+
+
+
+https://github.com/user-attachments/assets/6423b41c-efbe-4dab-9d38-b15692880786
+
+
+
+https://github.com/user-attachments/assets/cbd7e8d8-3bdf-44b1-ab8d-39a0d0303a65
+
+
+
+https://github.com/user-attachments/assets/2c882667-7f8b-451d-8d4c-3adec2f6da4a
+
+
 - `yolov8n.pt` - веса `YOLO`
 
 #base
