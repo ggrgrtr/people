@@ -10,6 +10,8 @@ from .reid import (
     color_similarity,
     cosine_similarity,
 )
+
+# импортируем вспомагательные функции для работы с рамками и траекториями
 from .utils import (
     append_path,
     bbox_area,
@@ -84,8 +86,10 @@ class Tracklet:
         self.person_id = None
         self.config = config
         self.min_confirmed_hits = config.min_confirmed_hits
+        # Kalman фильтр для прогнозирования положения человека в следующих кадрах
+        # помогает поддерживать трек даже при кратковременных пропусках детекции
         self.kalman = self._create_kalman(bbox)
-
+        # predicted_bbox - здесь задаем рамку, которую Kalman считает наиболее вероятной для текущего кадра. Она может отличаться от реального измерения от детектора, особенно если трек пропустил несколько кадров
         self.predicted_bbox = clip_bbox(bbox, frame_shape)
         # сглаживание рамки
         self.smooth_bbox = clip_bbox(bbox, frame_shape)
@@ -94,7 +98,7 @@ class Tracklet:
         self.feature = feature.astype(np.float32) if feature is not None else None
         self.color_hist = color_hist.astype(np.float32) if color_hist is not None else None
         self.face_feature = face_feature.astype(np.float32) if face_feature is not None else None
-        # identity признаки это эмбендинги личностей, хранящиеся в долговременной памяти 
+        # identity признаки это эмбендинги в виде вектора личностей, хранящиеся в долговременной памяти 
         self.identity_feature = self.feature.copy() if self.feature is not None else None
         self.identity_color_hist = self.color_hist.copy() if self.color_hist is not None else None
         self.identity_face_feature = self.face_feature.copy() if self.face_feature is not None else None
@@ -128,7 +132,7 @@ class Tracklet:
         #  первые 4 значения - положение и размер bbox
         # а последние 4 - их скорости
 
-        # Kalman использует эту структуру для прогнозирования будущего положения человека
+        # Kalman использует структуру для прогнозирования будущего положения человека
         kalman = cv2.KalmanFilter(8, 4)
         #  как состояние меняется во времени
         kalman.transitionMatrix = np.array(
@@ -144,7 +148,7 @@ class Tracklet:
             ],
             dtype=np.float32,
         )
-        # реально измеряем только центр и размер рамки
+        # реально корректируем только центр и размер рамки
         # скорости напрямую не наблюдаем, Kalman выводит их сам из последовательности кадров
         kalman.measurementMatrix = np.array(
             [
@@ -169,17 +173,22 @@ class Tracklet:
         kalman.statePost = np.array([[cx], [cy], [w], [h], [0], [0], [0], [0]], dtype=np.float32)
         return kalman
 
+    # state - вектор [cx, cy, w, h, vx, vy, vw, vh], который хранит текущее положение и скорость трека
+    #  берем первые 4 элемента (положение и размер) и преобразуем их обратно в рамку
     def _state_to_bbox(self, state, frame_shape):
         cx, cy, w, h = [float(value) for value in state[:4]]
+        # калман может выдать отрицательные размеры из-за шума, поэтому гарантируем минимальный размер рамки
         w = max(self.config.min_box_w, int(abs(w)))
         h = max(self.config.min_box_h, int(abs(h)))
         return clip_bbox(bbox_from_center((int(cx), int(cy)), w, h), frame_shape)
 
-    def predict(self, frame_shape):
+    # predict() делает прогноз положения человека в новом кадре на основе модели движения Kalman. Он также обновляет возраст трека и сглаживает рамку, чтобы избежать резких изменений. В конце он добавляет новую точку в путь движения человека.
+    def predict_kalman(self, frame_shape):
         prediction = self.kalman.predict().reshape(-1)
         self.age += 1
         # Prediction продолжает жизнь tracklet между detect-pass, но не считается новым наблюдением
         self.predicted_bbox = self._state_to_bbox(prediction, frame_shape)
+        # сглаживаем изменение рамки
         self.smooth_bbox = smooth_bbox(
             self.smooth_bbox,
             self.predicted_bbox,
@@ -192,18 +201,22 @@ class Tracklet:
             self.config.center_deadzone_px,
             self.config.size_deadzone_px,
         )
+        # добавляем в траекторию self.path точку положения человека
         append_path(self.path, get_center(self.smooth_bbox), min_distance=3)
 
     def update(self, bbox, feature, color_hist, face_feature, frame_shape):
+        # bbox - detections
         bbox = clip_bbox(bbox, frame_shape)
-        cx, cy = get_center(bbox)
+        cx, cy = get_center(bbox) # можно ли здесь вместо cx, cy использовать bbox[0], bbox[1]???????7
         measurement = np.array(
             [[cx], [cy], [int(bbox[2])], [int(bbox[3])]],
             dtype=np.float32,
         )
         self.kalman.correct(measurement)
 
+        # !!!!!!!!!!!!!!!!!!хуйня коммент сгаж. предсказания рамки, где Kalman определял, что будет человек. bbox - реальное измерение от детектора
         self.predicted_bbox = bbox
+        # 
         self.smooth_bbox = smooth_bbox(
             self.smooth_bbox,
             bbox,
@@ -216,13 +229,15 @@ class Tracklet:
             self.config.center_deadzone_px,
             self.config.size_deadzone_px,
         )
+        # добавляем точку в путь self.path
         append_path(self.path, get_center(self.smooth_bbox), min_distance=3)
 
-        self.hits += 1
+        self.hits += 1 # успешное попадание детектора
         self.seen_frames += 1
         self.missed_detections = 0
-        # Только после реального измерения из детектора tracklet считается наблюденным в текущем кадре.
+        # Только после реального измерения из детектора tracklet считается наблюденным в текущем кадре
         self.observed_in_current_frame = True
+        # обновление признака внешности
         self._update_appearance(feature, color_hist, face_feature)
         self._update_shape(frame_shape)
 
@@ -279,7 +294,7 @@ class Tracklet:
                     face_feature,
                     momentum=0.88,
                 )
-
+    # обновление shape descriptor - это способ сохранить информацию о размере и пропорциях человека, которая может помочь в идентификации, особенно если внешность нечеткая или изменчивая. Он также помогает фильтровать несовпадения по геометрии рамки.
     def _update_shape(self, frame_shape):
         new_shape = _shape_descriptor_from_bbox(self.smooth_bbox, frame_shape)
         self.shape_descriptor = new_shape.astype(np.float32)
@@ -379,7 +394,6 @@ class Tracklet:
 
 
 def _active_match_cost(track, det_box, feature, color_hist, face_feature, config):
-    # Учебная идея функции:
     # мы не пытаемся матчинить tracklet и detection по одному признаку.
     # Вместо этого собираем "стоимость несовпадения" из геометрии, движения и внешности.
     # Чем выше итоговый score, тем лучше совпадение. В конце он переводится в cost через 10 - score,
@@ -393,7 +407,7 @@ def _active_match_cost(track, det_box, feature, color_hist, face_feature, config
     face_score = track.best_face_similarity(face_feature)
 
     allowed_dist = max(72.0, max(ref_box[2], ref_box[3]) * 1.55)
-    motion_ok = iou >= 0.18 or dist <= allowed_dist * 0.30
+    # motion_ok = iou >= 0.18 or dist <= allowed_dist * 0.30
 
     if face_feature is not None and face_score >= config.active_match_face_threshold:
         # Лицо - самый сильный сигнал, поэтому при хорошем face match оно доминирует в стоимости.
@@ -410,7 +424,7 @@ def _active_match_cost(track, det_box, feature, color_hist, face_feature, config
 
     if (
         track.is_confirmed()
-        and not motion_ok
+        and dist > allowed_dist * 0.3
         and appearance >= 0.0
         and appearance < config.active_match_reid_threshold
         and iou < 0.18
@@ -418,9 +432,9 @@ def _active_match_cost(track, det_box, feature, color_hist, face_feature, config
         return None
 
     # Если лица нет или оно слабое, локальный матч строится на смеси:
-    # 1. геометрии рамки,
-    # 2. правдоподобия движения,
-    # 3. similarity внешнего вида.
+    # геометрии рамки
+    # правдоподобия движения
+    # similarity внешнего вида
     score = (
         iou * 2.25
         + max(0.0, 1.0 - dist / allowed_dist) * 0.95
@@ -461,8 +475,8 @@ def _associate_tracklets(tracklets, detections, features, color_histograms, face
     matched_tracks = set()
     matched_detections = set()
 
-    # Hungarian может вернуть пары даже для плохих ячеек.
-    # Поэтому после него обязательно фильтруем по порогу UNMATCHED_COST.
+    # Hungarian может вернуть пары даже для плохих ячеек
+    # Поэтому после него обязательно фильтруем по порогу UNMATCHED_COST
     for track_index, det_index in assignments:
         if cost_matrix[track_index, det_index] >= UNMATCHED_COST:
             continue
@@ -495,6 +509,8 @@ class TrackletTracker:
             and (secondary_center_inside or primary_center_inside)
         )
 
+    # Приоритизация треков -  помогает решить, какие треки важнее при удалении дубликатов
+    # отдаем приоритет более подтвержденным трекам с большим количеством попаданий, более длинной траекторией и большей рамкой. штрафуем треки с большим количеством пропущенных детекций, так как они менее надежные
     def _track_priority(self, track):
         score = 0.0
         if track.is_confirmed():
@@ -535,6 +551,7 @@ class TrackletTracker:
         smaller_duplicate = bbox_area(secondary.smooth_bbox) <= bbox_area(primary.smooth_bbox) * 0.85
         return newer_duplicate and smaller_duplicate
 
+    # 
     def _deduplicate_active_tracklets(self):
         if len(self.active_tracklets) <= 1:
             return []
@@ -557,17 +574,20 @@ class TrackletTracker:
 
     def predict_only(self, frame_shape):
         for track in self.active_tracklets:
-            track.predict(frame_shape)
+            track.predict_kalman(frame_shape)
         return self._deduplicate_active_tracklets()
+
+    # фильтруем, для каких детекций стоит считать затртаный Реид-эмбэдинг
+    # кандидаты - это те детекции, которые не имеют хорошего совпадения с существующими треками, или совпадение которых сомнительно по геометрии и движению. Это помогает экономить ресурсы, не запуская тяжелый ReID для детекций, которые с высокой вероятностью принадлежат уже существующим трекам.
 
     def reid_candidate_detection_indices(self, detections, frame_shape):
         if not detections:
             return []
 
-        if not self.active_tracklets:
+        if not self.active_tracklets: # если нет активных треков, все детекции - кандидаты для ReID, так как нет ничего, с чем их можно было бы сопоставить. Это гарантирует, что новые объекты будут идентифицированы и начнут треки
             return list(range(len(detections)))
 
-        # Кандидаты для дорогого ReID - это новые, сомнительные или identity-критичные детекции.
+        # Кандидаты для дорогого ReID - это новые, сомнительные или identity-критичные детекции
         candidate_indices = set()
         for det_index, det_box in enumerate(detections):
             best_track = None
@@ -611,8 +631,8 @@ class TrackletTracker:
         # Это делает обработку симметричной: каждый трек сначала прогнозируется вперед,
         # а затем, если нашлась подходящая detection, корректируется измерением.
         for track in self.active_tracklets:
-            track.predict(frame_shape)
-
+            track.predict_kalman(frame_shape)
+        # Затем мы ассоциируем детекции с существующими треками. Это ключевой момент, который определяет, как хорошо трекер сохраняет непрерывность треков и правильно идентифицирует объекты
         matches, unmatched_tracks, unmatched_detections = _associate_tracklets(
             self.active_tracklets,
             detections,

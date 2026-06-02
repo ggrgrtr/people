@@ -7,6 +7,8 @@ try:
 except Exception:
     ultralytics_hub_callbacks = None
 
+# импортируем вспомагательные функции для работы с рамками и траекториями
+# поиск YOLO-весов и фильтрация детекций для удаления дублей рамок и ложных срабатываний
 from .utils import (
     bbox_area,
     box_valid,
@@ -26,6 +28,7 @@ class PersonDetector:
             # Отключаем необязательные telemetry callbacks, чтобы predict не падал в ограниченных средах.
             ultralytics_hub_callbacks.events.enabled = False
         # yolov8n.pt  легкая и быстрая модель для детекции людей
+        # поиск модели по папкам или загрузка из интернета
         self.model = YOLO(resolve_yolo_weights(base_dir))
 
         try:
@@ -73,7 +76,7 @@ class PersonDetector:
 
     def detect(self, frame):
         frame_h, frame_w = frame.shape[:2]
-        # детекция идет по уменьшенному кадру: это дешевле, а координаты потом масштабируются обратно
+        # детекция по уменьшенному кадру: это дешевле, координаты масштабируются обратно
         scaled_w = max(64, int(frame_w * self.config.yolo_scale))
         scaled_h = max(64, int(frame_h * self.config.yolo_scale))
         scaled = cv2.resize(frame, (scaled_w, scaled_h))
@@ -89,7 +92,7 @@ class PersonDetector:
         # кадр подается в модель
         # scaled - уменьшенный кадр
         # imgsz - размер входа для YOLO
-        # conf - минимальный порог уверенности
+        # conf -  порог уверенности
         # classes=[0]  только класс person
         results = self.model(
             scaled,

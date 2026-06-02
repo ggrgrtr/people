@@ -18,7 +18,8 @@ import torch
 from .detector import PersonDetector
 # ReID через ResNet50 + цветовые гистограммы
 from .reid import AppearanceEncoder
-# утилиты для FPS, путей и источника видео
+
+# импортируем утилиты для FPS, путей папок и источника видео
 from .utils import RateMeter, build_output_paths, is_plausible_fps, resolve_source
 
 from .config import AppConfig
@@ -46,11 +47,12 @@ class ThreadedCameraCapture:
         self.thread = None
 
     # поднимаем поток для чтения кадров с камеры, который будет работать параллельно с основным потоком обработки видео, чтобы обеспечить более плавное и непрерывное чтение кадров, особенно при тяжелой обработке YOLO/ReID в основном потоке
-    def start(self):
+    def start_flow(self):
         if self.thread is not None:
             return self
         if not hasattr(threading, "_start_new_thread"):
             return None
+        # создаем и запускаем фоновый поток, который будет выполнять функцию _reader для чтения кадров с камеры. Устанавливаем daemon=True, чтобы поток автоматически завершался при закрытии основного потока
         self.thread = threading.Thread(target=self._reader, daemon=True)
         try:
             self.thread.start()
@@ -78,6 +80,7 @@ class ThreadedCameraCapture:
                         # Если чтение несколько раз подряд не удалось, считаем, что поток захвата сломался, и устанавливаем флаг read_failed, чтобы основной поток мог корректно завершиться
                         self.read_failed = True
                         self.stopped = True
+                    # пробуждает все потоки, ожидающие поле условия
                     self.condition.notify_all()
                     if self.read_failed:
                         return
@@ -90,7 +93,8 @@ class ThreadedCameraCapture:
             if not ok:
                 time.sleep(0.05)
 
-    def read(self, timeout=1.0):
+    # метод для основного потока, который ждет новый кадр от фонового потока и возвращает его. Он использует условие для синхронизации доступа к последнему кадру и обеспечивает таймаут, чтобы основной поток не блокировался бесконечно, если кадры не приходят
+    def read2(self, timeout=1.0):
         deadline = time.perf_counter() + max(0.01, float(timeout))
         with self.condition:
             while (
@@ -101,6 +105,7 @@ class ThreadedCameraCapture:
                 remaining = deadline - time.perf_counter()
                 if remaining <= 0:
                     break
+                # ждем уведомления от фонового потока о новом кадре или об ошибке чтения, с таймаутом, чтобы не блокироваться бесконечно
                 self.condition.wait(timeout=min(0.05, remaining))
 
             if self.latest_seq != self.last_consumed_seq:
@@ -114,6 +119,7 @@ class ThreadedCameraCapture:
         self.stopped = True
         with self.condition:
             self.condition.notify_all()
+        # ждем завершения фонового потока, чтобы гарантировать корректное освобождение ресурсов камеры
         if self.thread is not None:
             self.thread.join(timeout=1.0)
 
@@ -153,7 +159,6 @@ def create_writer(path, fps, frame_shape):
 
 
 def main():
-
     # парсим аргументы командной строки
     #     --source
     # --save-output
@@ -162,7 +167,10 @@ def main():
     args = parse_args()
 
     # создание объекта класса конфигурации приложения. все параметры и тд
-    config = AppConfig()
+    # передаем конфиг в осталные части программы, чтобы централизованно управлять поведением 
+    config = AppConfig() 
+
+
     # создание identity_tracking_output, если не существует
     # для сохранения видео, логов иы результатов трекинга, обеспечивая организацию выходных данных в одном месте
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -188,7 +196,7 @@ def main():
     # CОЗДАНИЕ ОБЪКТА КЛАССА ThreadedCameraCapture, который будет использоваться для многопоточного захвата кадров с камеры
     if is_live_source and config.threaded_camera_capture:
         # Для live-источника пытаемся отделить чтение камеры от тяжелой обработки кадров
-        threaded_capture = ThreadedCameraCapture(cap).start()
+        threaded_capture = ThreadedCameraCapture(cap).start_flow()
         if threaded_capture is None:
             # Если среда не умеет поднимать потоки продолжаем в невыгодгом синхронном режиме 
             print("Warning: threaded camera capture is unavailable, using synchronous capture.")
@@ -218,6 +226,7 @@ def main():
     # записывает и считывает  длительные треки, identity-логи, управляет долговременной памятью
     identity_manager = IdentityManager(config)
 
+    # строим пути для сохранения видео, логов и результатов трекинга на основе конфигурации и метки источника
     output_paths = build_output_paths(config.output_dir, source_label)
     should_save_output = args.save_output or not is_live_source or bool(args.output)
     output_video_path = Path(args.output) if args.output else output_paths["video"]
@@ -228,6 +237,7 @@ def main():
     frame_id = 0
     detect_pass_count = 0
     session_start = time.time()
+    # объект для расчета и обновления фпс
     source_read_meter = RateMeter(alpha=0.12)
     source_pts_meter = RateMeter(alpha=0.12)
     source_fps = 0.0
@@ -249,7 +259,7 @@ def main():
     while True:
         if threaded_capture is not None:
             # чтение кадра с камеры в отдельном потоке
-            read_status, frame, read_complete_time = threaded_capture.read(timeout=1.0)
+            read_status, frame, read_complete_time = threaded_capture.read2(timeout=1.0)
             if read_status == "timeout":
                 continue
             if read_status != "frame":
@@ -265,6 +275,7 @@ def main():
         read_cadence_fps = source_read_meter.update(read_complete_time)
         pts_based_fps = source_pts_meter.value
 
+        # отзеркаливаем картинку вебки
         if is_live_source and config.mirror_camera:
             frame = cv2.flip(frame, 1)
         elif metadata_source_fps <= 0.0:
@@ -291,30 +302,33 @@ def main():
         detect_interval = config.yolo_interval if has_active_tracklets else config.empty_scene_yolo_interval
         should_detect = frame_id == 1 or frame_id % max(1, detect_interval) == 0
 
-        finished_tracklets = []
+        finished_tracklets = [] #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if should_detect:
             detect_pass_count += 1
-            detections = detector.detect(frame)
-            # дорогой ReID считаем не для всех рамок подряд, а только для тех, где он реально нужен.
+            detections = detector.detect(frame) # детекции могут быть None или списком bbox, confidence
+
+            # смотрим для кого будем считать ReID 
             candidate_feature_indices = tracker.reid_candidate_detection_indices(
                 detections,
-                frame.shape,
-            )
+                frame.shape)
+            
             has_pending_identities = any(
                 track.is_confirmed() and track.person_id is None
-                for track in tracker.active_tracklets
-            )
+                for track in tracker.active_tracklets)
+
             need_full_reid = (
                 not has_active_tracklets
                 or has_pending_identities
-                or len(candidate_feature_indices) >= config.reid_force_count
-            )
+                or len(candidate_feature_indices) >= config.reid_force_count)
+        
             should_extract_features = bool(detections) and (
                 need_full_reid
                 or detect_pass_count % max(1, config.reid_interval) == 0
             )
+
             selected_feature_indices = None if should_extract_features else []
             if should_extract_features and not need_full_reid:
+                # если не нужно полный ReID, но есть кандидаты, то приоритизируем их для извлечения признаков, чтобы сэкономить ресурсы и ускорить обработку, фокусируясь на наиболее релевантных детекциях для идентификации
                 selected_feature_indices = candidate_feature_indices[: config.max_reid_detections]
                 if not selected_feature_indices:
                     selected_feature_indices = sorted(
@@ -328,20 +342,20 @@ def main():
                 detections,
                 include_features=should_extract_features,
                 max_feature_boxes=None,
-                feature_indices=selected_feature_indices,
-            )
+                feature_indices=selected_feature_indices)
+            
             face_features = face_backend.extract_batch(
                 frame,
                 detections,
-                candidate_indices=selected_feature_indices,
-            )
+                candidate_indices=selected_feature_indices)
+            
             finished_tracklets = tracker.update(
                 detections,
                 features,
                 color_histograms,
                 face_features,
-                frame.shape,
-            )
+                frame.shape)
+            
         else:
             finished_tracklets = tracker.predict_only(frame.shape)
 
@@ -406,6 +420,7 @@ def main():
     cv2.destroyAllWindows()
 
     session_duration = time.time() - session_start
+    # пуш полученных данных
     identity_manager.save(
         output_paths["events"],
         routes_dir=output_paths["routes_dir"],
@@ -429,7 +444,7 @@ if __name__ == "__main__":
 
 
 
-
+# ЭНКОДЕР ПРИЗНАКОВ И ЦВЕТОВЫХ ГИСТОГРАММ
 # создаем экземпляр класса AppearanceEncoder, который будет использоваться
 # для извлечения признаков и цветовых гистограмм из кадров видео, что позволяет идентифицировать и отслеживать людей на основе их внешнего вида.
 
@@ -438,7 +453,6 @@ if __name__ == "__main__":
 # backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
 
 # создаем экземпляр класса с моделью и весами
-
 
 # загружаем чекпоинт (словарь состояния) с общей структурой модели из файла .pth
 # выделяем словарь весов в _extract_state_dict из вссего словаря
@@ -462,4 +476,38 @@ if __name__ == "__main__":
 # основной поток main() ждёт новый кадр через read()
 # Один поток кладёт новый кадр и будит второй; второй ждёт кадр и безопасно его забирает
 # Без Condition основной поток мог бы постоянно крутиться в цикле и проверять: “появился новый кадр или нет?” Это называется busy waiting 
-# _reader() читает кадры в цикле, обновляет self.latest_frame и self.latest_timestamp, а также увеличивает self.latest_seq для сигнализации о новом кадре. Он использует self.condition.notify_all(), чтобы разбудить основной поток, который может ждать нового кадра.
+# _reader() читает кадры в цикле, обновляет self.latest_frame и self.latest_timestamp, а также увеличивает self.latest_seq для сигнализации о новом кадре. Он использует self.condition.notify_all(), чтобы разбудить основной поток, который может ждать нового кадра
+
+
+# используем объект класса конфиг в app.py и передаем из app.py в другие части программы, такие как детектор, трекер и менеджер идентичности, чтобы централизованно управлять поведением приложения и легко настраивать параметры трекинга, детекции и ReID в одном месте
+
+
+# Запуск идет через start.py или main.py в app.main()
+#  Потом app.py открывает источник, detector.py находит bbox людей
+#  tracklets.py сглаживает и ведет треки через функции из utils.py,
+#  identity_manager.py записывает маршрут identity, а renderer.py рисует цветные рамки
+
+
+
+# как работает сглживание рамки def smooth_bbox()?
+# как связан Калман с действительным положением рамки, какая из 2х точек добавляется в траекторию
+# как работает сопоставления detection с tracklet в tracklets.py
+# вычисления IoU в identity_manager.py это?
+# identity-память: чем отличются треки длительной и короткой памяти, как она устроена, какие данные хранит, как обновляется, как происходит сопоставление с новыми наблюдениями
+# что за reid_backbone = "resnet50_gem" — тип модели признаков
+# как работает маршрутизация треков в identity_manager.py, как строятся маршруты, какие данные сохраняются в логах
+# как в реснет50 используется GeM pooling, что это такое и зачем он нужен для ReID
+# как в реснет50 используется L2 нормализация, зачем она нужна для ReID
+# как в реснет50 используется dropout, зачем он нужен для ReID
+# как в реснет50 используется forward?
+# что делают Реид веса и чем они отличаются от обычных весов для классификации и цветовых гистограмм
+# как работает фильтрация детекций в детекторе
+# как и где удаляются дубликаты треков в треккере, какие условия для этого нужны, как приоритизируются треки при удалении дубликатов
+# как и где штрафуется трек
+
+# зачем в треклетс.пу у трека есть отдельно smooth_bbox и predicted_bbox   +
+# в чем разница self.id и self.person_id у трека 
+# active_tracklets и finished_tracklets
+
+# is_confirmed, self.predicted_bbox трека
+# как работает надежность трека

@@ -6,6 +6,7 @@ import torch.nn.functional as F
 # используем пре-трэин модель реснет50
 from torchvision import models
 
+# импортируем поиск весов для РеИд
 from .utils import resolve_reid_weights
 
 
@@ -23,6 +24,9 @@ class GeMPooling2d(nn.Module):
     # GeM pooling 
     # лучше сохраняет заметные  признаки одежды, текстуры, силуэта
     def forward(self, x):
+        # поднимаем элементы тензора к степени p, что позволяет усилить более сильные активации
+        # и подавить слабые, что помогает модели фокусироваться на наиболее заметных признаках в изображении,
+        # таких как яркие цвета или четкие текстуры, которые важны для идентификации людей
         x = x.clamp(min=self.eps).pow(self.p)
         # L2 нормализация после GeM pooling, чтобы сохранить масштаб признаков
         #  и обеспечить стабильность при сравнении дескрипторов
@@ -187,7 +191,7 @@ class AppearanceEncoder:
         # config - все настройки ReID
         self.config = config
         self.device = device
-        # размер кропа, который определяется на основе настроек конфигурации ReID
+        # размер кропа на основе настроек конфигурации ReID
         self.input_size = (int(config.reid_input_width), int(config.reid_input_height))
         self.norm_mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
         self.norm_std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
@@ -226,7 +230,7 @@ class AppearanceEncoder:
             new_key = str(key)
             # убираем загруженные префиксы, которые могут быть добавлены при сохранении модели в разных форматах
             for prefix in ("module.", "model.", "backbone.", "base."):
-                if new_key.startswith(prefix):
+                if new_key.startswith(prefix): # начинается ли имя ячейки с одного из этих префиксов, если да, то удаляем его, чтобы привести к формату, который ожидает наша модель
                     new_key = new_key[len(prefix) :]
 
             # адаптируем ключи для начального блока модели, чтобы они соответствовали структуре нашего бэкбона, что позволяет успешно загрузить веса в модель, даже если исходный чекпоинт использует другую нотацию для этих слоев
@@ -296,10 +300,12 @@ class AppearanceEncoder:
             )
         return True
 
+
+    # !!!!!!!!!!
     def _build_model(self, device, base_dir):
         # создаем объект с resnet50
         model = ResNet50ReIDBackbone(self.config)
-        # возвращаем веса для РеиД
+        # ищем веса для РеиД и возвращаем путь к файлу utils.py
         weights_path = resolve_reid_weights(base_dir, self.config.reid_weights)
         if weights_path is not None:
             # загружает более подходящие ReID-веса
@@ -311,6 +317,7 @@ class AppearanceEncoder:
         model.eval().to(device)
         return model, weights_path
 
+    # вырезаем кроп с падингом вокруг бокса, чтобы захватить больше контекста для лучшего распознавания
     def _crop_person(self, frame, bbox, pad=None):
         frame_h, frame_w = frame.shape[:2]
         x, y, w, h = [int(v) for v in bbox]
@@ -330,8 +337,8 @@ class AppearanceEncoder:
         crop = frame[y1:y2, x1:x2]
         return crop if crop.size > 0 else None
 
+    # считает гистограмму по оттенку и насыщенности
     def _compute_histogram(self, hsv_crop):
-        # считает гистограмму по оттенку и насыщенности
         # 12*8 бинов в reid_hist_h_bins  и reid_hist_s_bins
         hist = cv2.calcHist(
             [hsv_crop],
@@ -345,11 +352,12 @@ class AppearanceEncoder:
         # возвращаем паддинг гистограммы вытянутого в одномерныйй массив
         return hist.flatten()
 
+    # строим цветовой дескриптор по кропу, который описывает цветовую характеристику персоны, учитывая общую цветовую схему и особенности верхней и нижней части одежды, что позволяет более точно различать людей по цвету их одежды
     def _build_color_descriptor(self, crop):
         # BGR в HSV
         # H отвечает за оттенок, S за насыщенность, V за яркость
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        h = hsv.shape[0]
+        h = hsv.shape[0] # высота кропа, которая используется для определения зон верхней и нижней
 
         # делим кроп на секции
         # зоны специально пересекабтся, чтобы оценка цвета была более устойчивой к небольшим изменениям позы или кропа
@@ -437,15 +445,16 @@ class AppearanceEncoder:
                     for index in feature_indices
                     if 0 <= int(index) < len(boxes)
                 }
+        else:
+            if max_feature_boxes is None or max_feature_boxes <= 0:
+                selected_feature_indices = set(range(len(boxes)))
             else:
                 ordered_indices = sorted(
                     range(len(boxes)),
                     key=lambda index: max(1, int(boxes[index][2])) * max(1, int(boxes[index][3])),
-                    reverse=True,
-                )
-                if max_feature_boxes is not None and max_feature_boxes > 0:
-                    ordered_indices = ordered_indices[: max_feature_boxes]
-                selected_feature_indices = set(ordered_indices)
+                    reverse=True)
+                selected_feature_indices = set(ordered_indices[: max_feature_boxes])
+
 
         tensors = []
         valid_indices = []
@@ -455,7 +464,7 @@ class AppearanceEncoder:
             if crop is None:
                 continue
 
-            # Цветовой дескриптор считаем почти всегда. он дешевле и помогает даже без глубокого ReID
+            # Цветовой дескриптор считаем всегда. он дешевле и помогает даже без глубокого ReID
             color_histograms[index] = self._build_color_descriptor(crop)
             if include_features and index in selected_feature_indices:
                 tensors.append(self._preprocess_crop(crop))

@@ -12,6 +12,7 @@ from .reid import (
     color_similarity,
     cosine_similarity,
 )
+# импортируем функцию для работы траекторией и вычисления IoU 
 from .utils import get_center
 
 
@@ -303,8 +304,8 @@ class IdentityManager:
     def _match_identity(self, tracklet, occupied_identity_ids, frame_shape, frame_id):
         # Здесь формируется список всех identity, которые вообще имеют право претендовать на tracklet.
         # Затем выбирается лучший кандидат, но только если он:
-        # 1. достаточно уверенный сам по себе;
-        # 2. заметно лучше второго по качеству кандидата.
+        # 1. достаточно уверенный сам по себе
+        # 2. заметно лучше второго по качеству кандидата
         candidates = []
         for identity_id, identity in self.identities.items():
             if identity_id in occupied_identity_ids:
@@ -340,14 +341,14 @@ class IdentityManager:
         for track in tracklets:
             if not track.is_confirmed():
                 continue
-            # Prediction-only кадры не должны искусственно продлевать жизнь identity в журнале наблюдений.
+            # Prediction-only кадры не должны искусственно продлевать жизнь identity в журнале наблюдени
             if not track.was_observed():
                 continue
 
             created_identity = False
             if track.person_id is None and track.identity_ready():
                 # Identity присваивается только зрелым tracklet:
-                # они уже пережили несколько кадров и накопили достаточно признаков.
+                # они уже пережили несколько кадров и накопили достаточно признаков
                 identity_id = self._match_identity(
                     track,
                     occupied_identity_ids,
