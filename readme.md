@@ -30,7 +30,7 @@
 
 <img width="475" height="329" alt="image" src="https://github.com/user-attachments/assets/fd13e2da-08d0-4198-bb8d-53e1d476e839" />
 
-Obsidian graph:
+
 <img width="448" height="407" alt="image" src="https://github.com/user-attachments/assets/15334934-8120-4579-8c44-ffa1120849b1" />
 
 
